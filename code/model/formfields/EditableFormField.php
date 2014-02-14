@@ -384,7 +384,7 @@ class EditableFormField extends DataObject {
 	 * Implement custom field Configuration on this field. Includes such things as
 	 * settings and options of a given editable form field
 	 *
-	 * @return FieldSet
+	 * @return FieldList
 	 */
 	public function getFieldConfiguration() {
 		$extraClass = ($this->getSetting('ExtraClass')) ? $this->getSetting('ExtraClass') : '';
