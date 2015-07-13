@@ -78,6 +78,7 @@ class UserDefinedForm extends Page {
 			// define tabs
 			$fields->findOrMakeTab('Root.FormContent', _t('UserDefinedForm.FORM', 'Form'));
 			$fields->findOrMakeTab('Root.FormOptions', _t('UserDefinedForm.CONFIGURATION', 'Configuration'));
+			$fields->findOrMakeTab('Root.Recipients', _t('UserDefinedForm.RECIPIENTS', 'Recipients'));
 			$fields->findOrMakeTab('Root.Submissions', _t('UserDefinedForm.SUBMISSIONS', 'Submissions'));
 			
 			// field editor
@@ -94,25 +95,23 @@ class UserDefinedForm extends Page {
 			$editor->setRows(3);
 			$label->addExtraClass('left');
 			
-			// Set the summary fields of UserDefinedForm_EmailRecipient dynamically via config system
-			Config::inst()->update(
-				'UserDefinedForm_EmailRecipient',
-				'summary_fields',
-				array(
-					'EmailAddress' => _t('UserDefinedForm.EMAILADDRESS', 'Email'),
-					'EmailSubject' => _t('UserDefinedForm.EMAILSUBJECT', 'Subject'),
-					'EmailFrom' => _t('UserDefinedForm.EMAILFROM', 'From'),
-				)
-			);
+			// Define config for email recipients
+			$emailRecipientsConfig = GridFieldConfig_RecordEditor::create(10);
+			$emailRecipientsConfig->getComponentByType('GridFieldAddNewButton')
+				->setButtonName(
+					_t('UserDefinedForm.ADDEMAILRECIPIENT', 'Add Email Recipient')
+				);
 			
 			// who do we email on submission
-			$emailRecipients = new GridField('EmailRecipients', _t('UserDefinedForm.EMAILRECIPIENTS', 'Email Recipients'), $self->EmailRecipients(), GridFieldConfig_RecordEditor::create(10));
-			$emailRecipients->getConfig()->getComponentByType('GridFieldAddNewButton')->setButtonName(
-				_t('UserDefinedForm.ADDEMAILRECIPIENT', 'Add Email Recipient')
+			$emailRecipients = new GridField(
+				'EmailRecipients',
+				_t('UserDefinedForm.EMAILRECIPIENTS', 'Email Recipients'),
+				$self->EmailRecipients(),
+				$emailRecipientsConfig
 			);
 			
 			$fields->addFieldsToTab('Root.FormOptions', $onCompleteFieldSet);
-			$fields->addFieldToTab('Root.FormOptions', $emailRecipients);
+			$fields->addFieldToTab('Root.Recipients', $emailRecipients);
 			$fields->addFieldsToTab('Root.FormOptions', $self->getFormOptions());
 			
 			
@@ -313,7 +312,12 @@ SQL;
 	 * @return ArrayList
 	 */
 	public function FilteredEmailRecipients($data = null, $form = null) {
-		$recipients = new ArrayList($this->getComponents('EmailRecipients')->toArray());
+		$recipients = new ArrayList($this->EmailRecipients()->toArray());
+
+		// Filter by rules
+		$recipients = $recipients->filterByCallback(function($recipient) use ($data, $form) {
+			return $recipient->canSend($data, $form);
+		});
 
 		$this->extend('updateFilteredEmailRecipients', $recipients, $data, $form);
 
@@ -1137,13 +1141,13 @@ JS
 }
 
 /**
- * A Form can have multiply members / emails to email the submission 
+ * A Form can have multiply members / emails to email the submission
  * to and custom subjects
- * 
+ *
  * @package userforms
  */
 class UserDefinedForm_EmailRecipient extends DataObject {
-	
+
 	private static $db = array(
 		'EmailAddress' => 'Varchar(200)',
 		'EmailSubject' => 'Varchar(200)',
@@ -1151,77 +1155,220 @@ class UserDefinedForm_EmailRecipient extends DataObject {
 		'EmailReplyTo' => 'Varchar(200)',
 		'EmailBody' => 'Text',
 		'SendPlain' => 'Boolean',
-		'HideFormData' => 'Boolean'
+		'HideFormData' => 'Boolean',
+		'CustomRulesCondition' => 'Enum("And,Or")'
 	);
-	
+
 	private static $has_one = array(
 		'Form' => 'UserDefinedForm',
 		'SendEmailFromField' => 'EditableFormField',
 		'SendEmailToField' => 'EditableFormField',
 		'SendEmailSubjectField' => 'EditableFormField'
 	);
-	
-	private static $summary_fields = array();
+
+	private static $has_many = array(
+		'CustomRules' => 'UserDefinedForm_EmailRecipientCondition'
+	);
+
+	private static $summary_fields = array(
+		'EmailAddress',
+		'EmailSubject',
+		'EmailFrom'
+	);
+
+	public function summaryFields() {
+		$fields = parent::summaryFields();
+		if(isset($fields['EmailAddress'])) {
+			$fields['EmailAddress'] = _t('UserDefinedForm.EMAILADDRESS', 'Email');
+		}
+		if(isset($fields['EmailSubject'])) {
+			$fields['EmailSubject'] = _t('UserDefinedForm.EMAILSUBJECT', 'Subject');
+		}
+		if(isset($fields['EmailFrom'])) {
+			$fields['EmailFrom'] = _t('UserDefinedForm.EMAILFROM', 'From');
+		}
+		return $fields;
+	}
+
+	/**
+	 * Get instance of UserDefinedForm when editing in getCMSFields
+	 *
+	 * @return UserDefinedFrom
+	 */
+	protected function getFormParent() {
+		$formID = $this->FormID
+			? $this->FormID
+			: Session::get('CMSMain.currentPage');
+		return UserDefinedForm::get()->byID($formID);
+	}
+
+	public function getTitle() {
+		if($this->EmailAddress) {
+			return $this->EmailAddress;
+		}
+		if($this->EmailSubject) {
+			return $this->EmailSubject;
+		}
+		return parent::getTitle();
+	}
+
+	/**
+	 * Generate a gridfield config for editing filter rules
+	 *
+	 * @return GridFieldConfig
+	 */
+	protected function getRulesConfig() {
+		$formFields = $this->getFormParent()->Fields();
+
+		$config = GridFieldConfig::create()
+			->addComponents(
+				new GridFieldButtonRow('before'),
+				new GridFieldToolbarHeader(),
+				new GridFieldAddNewInlineButton(),
+				new GridState_Component(),
+				new GridFieldDeleteAction(),
+				$columns = new GridFieldEditableColumns()
+			);
+
+		$columns->setDisplayFields(array(
+			'ConditionFieldID' => function($record, $column, $grid) use ($formFields) {
+				return DropdownField::create($column, false, $formFields->map('ID', 'Title'));
+			},
+			'ConditionOption' => function($record, $column, $grid) {
+				$options = UserDefinedForm_EmailRecipientCondition::config()->condition_options;
+				return DropdownField::create($column, false, $options);
+			},
+			'ConditionValue' => function($record, $column, $grid) {
+				return TextField::create($column);
+			}
+		));
+
+		return $config;
+	}
 
 	/**
 	 * @return FieldList
 	 */
 	public function getCMSFields() {
-		
-		$fields = new FieldList(
-			new TextField('EmailSubject', _t('UserDefinedForm.EMAILSUBJECT', 'Email subject')),
-			new LiteralField('EmailFromContent', '<p>'._t(
-				'UserDefinedForm.EmailFromContent',
-				"The from address allows you to set who the email comes from. On most servers this ".
-				"will need to be set to an email address on the same domain name as your site. ".
-				"For example on yoursite.com the from address may need to be something@yoursite.com. ".
-				"You can however, set any email address you wish as the reply to address."
-			) . "</p>"),
-			new TextField('EmailFrom', _t('UserDefinedForm.FROMADDRESS','Send email from')),
-			new TextField('EmailReplyTo', _t('UserDefinedForm.REPLYADDRESS', 'Email for reply to')),
-			new TextField('EmailAddress', _t('UserDefinedForm.SENDEMAILTO','Send email to')),
-			new CheckboxField('HideFormData', _t('UserDefinedForm.HIDEFORMDATA', 'Hide form data from email?')),
-			new CheckboxField('SendPlain', _t('UserDefinedForm.SENDPLAIN', 'Send email as plain text? (HTML will be stripped)')),
-			new TextareaField('EmailBody', _t('UserDefinedForm.EMAILBODY','Body'))
-		);
-		
-		$formID = ($this->FormID != 0) ? $this->FormID : Session::get('CMSMain.currentPage');
-		$dropdowns = array();
-		// if they have email fields then we could send from it
-		$validEmailFields = EditableEmailField::get()->filter('ParentID', (int)$formID);
-		// for the subject, only one-line entry boxes make sense
-		$validSubjectFields = EditableTextField::get()->filter('ParentID', (int)$formID)->filterByCallback(function($item, $list) { return (int)$item->getSetting('Rows') === 1; });
+		// Determine optional field values
+		$form = $this->getFormParent();
+
 		// predefined choices are also candidates
-		$multiOptionFields = EditableMultipleOptionField::get()->filter('ParentID', (int)$formID);
+		$multiOptionFields = EditableMultipleOptionField::get()->filter('ParentID', $form->ID);
 
-		$fields->insertAfter($dropdowns[] = new DropdownField(
-			'SendEmailFromFieldID',
-			_t('UserDefinedForm.ORSELECTAFIELDTOUSEASFROM', '.. or select a field to use as reply to address'),
-			$validEmailFields->map('ID', 'Title')
-		), 'EmailReplyTo');
+		// if they have email fields then we could send from it
+		$validEmailFromFields = EditableEmailField::get()->filter('ParentID', $form->ID);
 
-		$validEmailFields = new ArrayList($validEmailFields->toArray());
-		$validEmailFields->merge($multiOptionFields);
+		// For the subject, only one-line entry boxes make sense
+		$validSubjectFields = EditableTextField::get()
+			->filter('ParentID', $form->ID)
+			->filterByCallback(function($item, $list) {
+				return (int)$item->getSetting('Rows') === 1;
+			});
 		$validSubjectFields->merge($multiOptionFields);
 
-		$fields->insertAfter($dropdowns[] = new DropdownField(
-			'SendEmailToFieldID',
-			_t('UserDefinedForm.ORSELECTAFIELDTOUSEASTO', '.. or select a field to use as the to address'),
-			$validEmailFields->map('ID', 'Title')
-		), 'EmailAddress');
-		$fields->insertAfter($dropdowns[] = new DropdownField(
-			'SendEmailSubjectFieldID',
-			_t('UserDefinedForm.SELECTAFIELDTOSETSUBJECT', '.. or select a field to use as the subject'),
-			$validSubjectFields->map('ID', 'Title')
-		), 'EmailSubject');
+		// To address can only be email fields or multi option fields
+		$validEmailToFields = new ArrayList($validEmailFromFields->toArray());
+		$validEmailToFields->merge($multiOptionFields);
 
-		foreach($dropdowns as $dropdown) {
-			$dropdown->setHasEmptyDefault(true);
-			$dropdown->setEmptyString(" ");
-		}
+		// Build fieldlist
+		$fields = new FieldList(new TabSet(
+			'Root',
+			new Tab('Main', _t('UserDefinedForm.TAB_MAIN', 'Email Details')),
+			new Tab('EmailContent', _t('UserDefinedForm.TAB_CONTENT', 'Email Content')),
+			new Tab('CustomRules', _t('UserDefinedForm.TAB_RULES', 'Custom Rules'))
+		));
+
+		// Configuration fields
+		$fields->addFieldsToTab('Root.Main', array(
+			// Subject
+			FieldGroup::create(
+				TextField::create('EmailSubject', _t('UserDefinedForm.TYPESUBJECT', 'Type subject'))
+					->setAttribute('style', 'min-width: 400px;'),
+				DropdownField::create(
+					'SendEmailSubjectFieldID',
+					_t('UserDefinedForm.SELECTAFIELDTOSETSUBJECT', '.. or select a field to use as the subject'),
+					$validSubjectFields->map('ID', 'Title')
+				)->setEmptyString('')
+			)
+				->setTitle(_t('UserDefinedForm.EMAILSUBJECT', 'Email subject')),
+
+			// To
+			FieldGroup::create(
+				TextField::create('EmailAddress', _t('UserDefinedForm.TYPETO', 'Type to address'))
+					->setAttribute('style', 'min-width: 400px;'),
+				DropdownField::create(
+					'SendEmailToFieldID',
+					_t('UserDefinedForm.ORSELECTAFIELDTOUSEASTO', '.. or select a field to use as the to address'),
+					$validEmailToFields->map('ID', 'Title')
+				)->setEmptyString(' ')
+			)
+				->setTitle(_t('UserDefinedForm.SENDEMAILTO','Send email to'))
+				->setDescription(_t(
+					'UserDefinedForm.SENDEMAILTO_DESCRIPTION',
+					'You may enter multiple email addresses as a comma separated list.'
+				)),
+
+
+			// From
+			TextField::create('EmailFrom', _t('UserDefinedForm.FROMADDRESS','Send email from'))
+				->setDescription(_t(
+					'UserDefinedForm.EmailFromContent',
+					"The from address allows you to set who the email comes from. On most servers this ".
+					"will need to be set to an email address on the same domain name as your site. ".
+					"For example on yoursite.com the from address may need to be something@yoursite.com. ".
+					"You can however, set any email address you wish as the reply to address."
+				)),
+
+
+			// Reply-To
+			FieldGroup::create(
+				TextField::create('EmailReplyTo', _t('UserDefinedForm.TYPEREPLY', 'Type reply address'))
+					->setAttribute('style', 'min-width: 400px;'),
+				DropdownField::create(
+					'SendEmailFromFieldID',
+					_t('UserDefinedForm.ORSELECTAFIELDTOUSEASFROM', '.. or select a field to use as reply to address'),
+					$validEmailFromFields->map('ID', 'Title')
+				)->setEmptyString(' ')
+			)
+				->setTitle(_t('UserDefinedForm.REPLYADDRESS', 'Email for reply to'))
+				->setDescription(_t(
+					'UserDefinedForm.REPLYADDRESS_DESCRIPTION',
+					'The email address which the recipient is able to \'reply\' to.'
+				))
+		));
+
+		// Email templates
+		$fields->addFieldsToTab('Root.EmailContent', array(
+			new TextareaField('EmailBody', _t('UserDefinedForm.EMAILBODY','Body')),
+			new CheckboxField('HideFormData', _t('UserDefinedForm.HIDEFORMDATA', 'Hide form data from email?')),
+			new CheckboxField('SendPlain', _t('UserDefinedForm.SENDPLAIN', 'Send email as plain text? (HTML will be stripped)'))
+		));
+
+		// Custom rules for sending this field
+		$grid = new GridField(
+			"CustomRules",
+			_t('EditableFormField.CUSTOMRULES', 'Custom Rules'),
+			$this->CustomRules(),
+			$this->getRulesConfig()
+		);
+		$grid->setDescription(_t(
+			'UserDefinedForm.RulesDescription',
+			'Emails will only be sent to the recipient if the custom rules are met. If no rules are defined, this receipient will receive notifications for every submission.'
+		));
+		$fields->addFieldsToTab('Root.CustomRules', array(
+			new DropdownField(
+				'CustomRulesCondition',
+				_t('UserDefinedForm.SENDIF', 'Send condition'),
+				array(
+					'Or' => 'Any conditions are true',
+					'And' => 'All conditions are true'
+				)
+			),
+			$grid
+		));
 
 		$this->extend('updateCMSFields', $fields);
-
 		return $fields;
 	}
 
@@ -1242,7 +1389,7 @@ class UserDefinedForm_EmailRecipient extends DataObject {
 	public function canView($member = null) {
 		return $this->Form()->canView();
 	}
-	
+
 	/**
 	 * @param Member
 	 *
@@ -1251,7 +1398,7 @@ class UserDefinedForm_EmailRecipient extends DataObject {
 	public function canEdit($member = null) {
 		return $this->Form()->canEdit();
 	}
-	
+
 	/**
 	 * @param Member
 	 *
@@ -1259,6 +1406,81 @@ class UserDefinedForm_EmailRecipient extends DataObject {
 	 */
 	public function canDelete($member = null) {
 		return $this->Form()->canDelete();
+	}
+
+	/**
+	 * Determine if this recipient may receive notifications for this submission
+	 *
+	 * @param array $data
+	 * @param Form $form
+	 * @return bool
+	 */
+	public function canSend($data, $form) {
+		// Skip if no rules configured
+		$customRules = $this->CustomRules();
+		if(!$customRules->count()) {
+			return true;
+		}
+
+		// Check all rules
+		$isAnd = $this->CustomRulesCondition === 'And';
+		foreach($customRules as $customRule) {
+			$matches = $customRule->matches($data, $form);
+			if($isAnd && !$matches) {
+				return false;
+			}
+			if(!$isAnd && $matches) {
+				return true;
+			}
+		}
+
+		// Once all rules are checked
+		return $isAnd;
+	}
+}
+
+
+
+class UserDefinedForm_EmailRecipientCondition extends DataObject {
+
+	private static $condition_options = array(
+		"IsBlank" => "Is blank",
+		"IsNotBlank" => "Is not blank",
+		"Equals" => "Equals",
+		"NotEquals" => "Doesn't equal"
+	);
+
+	private static $db = array(
+		'ConditionOption' => 'Enum("IsBlank,IsNotBlank,Equals,NotEquals")',
+		'ConditionValue' => 'Varchar'
+	);
+
+	private static $has_one = array(
+		'Parent' => 'UserDefinedForm_EmailRecipient',
+		'ConditionField' => 'EditableFormField'
+	);
+
+	/**
+	 * Determine if this rule matches the given condition
+	 *
+	 * @param array $data
+	 * @param Form $form
+	 * @return bool
+	 */
+	public function matches($data, $form) {
+		$fieldName = $this->ConditionField()->Name;
+		$fieldValue = isset($data[$fieldName]) ? $data[$fieldName] : null;
+		switch($this->ConditionOption) {
+			case 'IsBlank':
+				return empty($fieldValue);
+			case 'IsNotBlank':
+				return !empty($fieldValue);
+			default:
+				$matches = is_array($fieldValue)
+					? in_array($this->ConditionValue, $fieldValue)
+					: $this->ConditionValue === (string)$fieldValue;
+				return ($this->ConditionOption === 'Equals') === (bool)$matches;
+		}
 	}
 }
 
@@ -1287,5 +1509,5 @@ class UserDefinedForm_SubmittedFormEmail extends Email {
  	 */
 	public function setReplyTo($email) {
 		$this->customHeaders['Reply-To'] = $email;
-	}  
+	}
 }
