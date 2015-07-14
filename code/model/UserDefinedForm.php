@@ -1272,10 +1272,10 @@ class UserDefinedForm_EmailRecipient extends DataObject {
 		$validEmailToFields->merge($multiOptionFields);
 
 		// Build fieldlist
-		$fields = new FieldList(new TabSet('Root'));
+		$fields = FieldList::create(Tabset::create('Root')->addExtraClass('EmailRecipientForm'));
 
 		// Configuration fields
-		$fields->addFieldsToTab('Root.Main', array(
+		$fields->addFieldsToTab('Root.EmailDetails', array(
 			// Subject
 			FieldGroup::create(
 				TextField::create('EmailSubject', _t('UserDefinedForm.TYPESUBJECT', 'Type subject'))
@@ -1334,8 +1334,8 @@ class UserDefinedForm_EmailRecipient extends DataObject {
 		));
 
 		// Email templates
-		$fields->addFieldsToTab('Root.EmailBody', array(
-			new TextareaField('EmailBody', _t('UserDefinedForm.EMAILBODY','Body')),
+		$fields->addFieldsToTab('Root.EmailContent', array(
+			new TextareaField('EmailBody', _t('UserDefinedForm.EMAILBODY','Email Content')),
 			new CheckboxField('HideFormData', _t('UserDefinedForm.HIDEFORMDATA', 'Hide form data from email?')),
 			new CheckboxField('SendPlain', _t('UserDefinedForm.SENDPLAIN', 'Send email as plain text? (HTML will be stripped)'))
 		));
