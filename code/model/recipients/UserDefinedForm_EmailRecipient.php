@@ -59,10 +59,7 @@ class UserDefinedForm_EmailRecipient extends DataObject {
 	 * @return UserDefinedFrom
 	 */
 	protected function getFormParent() {
-		$formID = $this->FormID
-			? $this->FormID
-			: Session::get('CMSMain.currentPage');
-		return UserDefinedForm::get()->byID($formID);
+		return $this->FormID ? $this->Form() : false;
 	}
 
 	public function getTitle() {
@@ -81,30 +78,32 @@ class UserDefinedForm_EmailRecipient extends DataObject {
 	 * @return GridFieldConfig
 	 */
 	protected function getRulesConfig() {
-		$formFields = $this->getFormParent()->Fields();
+	    $config = GridFieldConfig::create();
+		if( $parent = $this->getFormParent() ){
+		    $formFields = $parent->Fields();
 
-		$config = GridFieldConfig::create()
-			->addComponents(
-				new GridFieldButtonRow('before'),
-				new GridFieldToolbarHeader(),
-				new GridFieldAddNewInlineButton(),
-				new GridFieldDeleteAction(),
-				$columns = new GridFieldEditableColumns()
-			);
+    		$config = GridFieldConfig::create()
+    			->addComponents(
+    				new GridFieldButtonRow('before'),
+    				new GridFieldToolbarHeader(),
+    				new GridFieldAddNewInlineButton(),
+    				new GridFieldDeleteAction(),
+    				$columns = new GridFieldEditableColumns()
+    			);
 
-		$columns->setDisplayFields(array(
-			'ConditionFieldID' => function($record, $column, $grid) use ($formFields) {
-				return DropdownField::create($column, false, $formFields->map('ID', 'Title'));
-			},
-			'ConditionOption' => function($record, $column, $grid) {
-				$options = UserDefinedForm_EmailRecipientCondition::config()->condition_options;
-				return DropdownField::create($column, false, $options);
-			},
-			'ConditionValue' => function($record, $column, $grid) {
-				return TextField::create($column);
-			}
-		));
-
+    		$columns->setDisplayFields(array(
+    			'ConditionFieldID' => function($record, $column, $grid) use ($formFields) {
+    				return DropdownField::create($column, false, $formFields->map('ID', 'Title'));
+    			},
+    			'ConditionOption' => function($record, $column, $grid) {
+    				$options = UserDefinedForm_EmailRecipientCondition::config()->condition_options;
+    				return DropdownField::create($column, false, $options);
+    			},
+    			'ConditionValue' => function($record, $column, $grid) {
+    				return TextField::create($column);
+    			}
+    		));
+		}
 		return $config;
 	}
 
@@ -113,25 +112,29 @@ class UserDefinedForm_EmailRecipient extends DataObject {
 	 */
 	public function getCMSFields() {
 		Requirements::javascript(USERFORMS_DIR . '/javascript/Recipient.js');
-
+        $fields = FieldList::create(Tabset::create('Root')->addExtraClass('EmailRecipientForm'));
+        $multiOptionFields = new DataList('EditableMultipleOptionField');
+		$validEmailFromFields = new DataList('EditableEmailField');
+		$validSubjectFields = new DataList('EditableTextField');
+		
 		// Determine optional field values
-		$form = $this->getFormParent();
-
-		// predefined choices are also candidates
-		$multiOptionFields = EditableMultipleOptionField::get()->filter('ParentID', $form->ID);
-
-		// if they have email fields then we could send from it
-		$validEmailFromFields = EditableEmailField::get()->filter('ParentID', $form->ID);
-
-		// For the subject, only one-line entry boxes make sense
-		$validSubjectFields = ArrayList::create(
-			EditableTextField::get()
-				->filter('ParentID', $form->ID)
-				->exclude('Rows:GreaterThan', 1)
-				->toArray()
-		);
-		$validSubjectFields->merge($multiOptionFields);
-
+		if( $form = $this->getFormParent() ){
+    
+    		// predefined choices are also candidates
+    		$multiOptionFields = EditableMultipleOptionField::get()->filter('ParentID', $form->ID);
+    
+    		// if they have email fields then we could send from it
+    		$validEmailFromFields = EditableEmailField::get()->filter('ParentID', $form->ID);
+    
+    		// For the subject, only one-line entry boxes make sense
+    		$validSubjectFields = ArrayList::create(
+    			EditableTextField::get()
+    				->filter('ParentID', $form->ID)
+    				->exclude('Rows:GreaterThan', 1)
+    				->toArray()
+    		);
+    		$validSubjectFields->merge($multiOptionFields);
+		}
 		// To address cannot be unbound, so restrict to pre-defined lists
 		$validEmailToFields = $multiOptionFields;
 
