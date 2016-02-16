@@ -212,9 +212,9 @@ en:
     SUBMITBUTTON: Submit
     TEXTONCLEAR: 'Text on clear button:'
     TEXTONSUBMIT: 'Text on submit button:'
-    TYPEREPLY: 'Type reply address'
-    TYPESUBJECT: 'Type subject'
-    TYPETO: 'Type to address'
+    TYPEREPLY: 'Type in the "reply" address'
+    TYPESUBJECT: 'Type in the subject'
+    TYPETO: 'Type in the "to" address'
   UserDefinedForm_EmailRecipient:
     PLURALNAME: 'User Defined Form Email Recipients'
     SINGULARNAME: 'User Defined Form Email Recipient'
