@@ -2,8 +2,8 @@
 
 
 /**
- * A Form can have multiply members / emails to email the submission
- * to and custom subjects
+ * A Form can have multiple members / emails to email the submission
+ * to, each with custom subject & body, and triggered by custom rules
  *
  * @package userforms
  */
